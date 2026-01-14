@@ -1,0 +1,24 @@
+#!/bin/bash
+
+read -p "This will delete remote branches! Proceed? (y/N)" -r VAR
+
+if [[ $VAR != "y" ]] || [[ $VAR == "Y" ]]; then
+  echo "Operation canceled"
+  exit 0
+fi
+
+FILE=$1
+
+if [[ ! -f $FILE ]]; then
+  echo "File $FILE is not found"
+  exit 0
+fi
+
+echo "Deleting branches stored in $FILE"
+
+while read -r line
+do
+    branch=$(echo "$line" | sed "s/origin\//origin /")
+    echo "deleting $branch"
+    git push -d $(echo $branch)
+done < "$FILE"
