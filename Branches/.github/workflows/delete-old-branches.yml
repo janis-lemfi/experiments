@@ -1,0 +1,61 @@
+name: Delete old branches
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Delete old branches
+        env:
+          GH_PAGER: ""
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GH_PAGER=
+          git fetch --prune
+
+          remote_branches=$(git for-each-ref \
+            --sort=committerdate --format="%(committerdate:short) %(refname:short)" refs/remotes/ |
+            grep -v HEAD |
+            awk -v date="$(date -d '3 months ago' +%Y-%m-%d)" '$1 < date { print $2 }')
+
+          echo "Got remote branches older than 3 months"
+
+          while IFS= read -r line; do
+            branch="${line#origin/}"
+            read -r protected date < <(
+              gh api "repos/${GITHUB_REPOSITORY}/branches/$branch" |
+                jq -r '"\(.protected) \(.commit.commit.committer.date | split(\"T\")[0])"'
+            )
+
+            if [[ "$protected" == "true" ]]; then
+              if [[ "$date" < "$(date -d '1 year ago' +%Y-%m-%d)" ]]; then
+                can_delete=true
+              else
+                can_delete=false
+              fi
+
+              if [[ "$can_delete" != "true" ]] || [[ "$branch" =~ ^(main|master|develop|dev)$ ]]; then
+                echo "Cannot delete protected branch: $branch"
+                continue
+              fi
+            fi
+
+            echo "Deleting branch: $branch"
+            git push origin --delete "$branch" || echo "Failed to delete $branch"
+          done <<< "$remote_branches"

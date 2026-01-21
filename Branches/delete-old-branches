@@ -1,24 +1,35 @@
 #!/bin/bash
 
-read -p "This will delete remote branches! Proceed? (y/N)" -r VAR
+# gh output without pager
+export GH_PAGER=
 
-if [[ $VAR != "y" ]] || [[ $VAR == "Y" ]]; then
-  echo "Operation canceled"
-  exit 0
-fi
+git fetch --prune
 
-FILE=$1
+remote_branches=$(git for-each-ref \
+	--sort=committerdate --format="%(committerdate:short) %(refname:short)" refs/remotes/ |
+	grep -v HEAD |
+	awk -v date="$(date -v-3m +%Y-%m-%d)" '$1 < date { print $2 }')
 
-if [[ ! -f $FILE ]]; then
-  echo "File $FILE is not found"
-  exit 0
-fi
+echo "Got remote branches older than 3 months"
 
-echo "Deleting branches stored in $FILE"
+for line in ${remote_branches}; do
+	branch=$(echo "$line" | sed "s/origin\///")
+	read -r protected date < <(
+		gh api "repos/Newton-Capital/Lemonadefinance/branches/$branch" |
+			jq '"\(.protected) \(.commit.commit.committer.date)"' |
+			sed -e 's/\"//g' |
+			sed -E 's/T.*//g'
+	)
 
-while read -r line
-do
-    branch=$(echo "$line" | sed "s/origin\//origin /")
-    echo "deleting $branch"
-    git push -d $(echo $branch)
-done < "$FILE"
+	if [[ "$protected" == "true" ]]; then
+		# check if branch can still be deleted (one+ year old branches)
+		can_delete=$(echo "$date" | awk -v date="$(date -v-1y +%Y-%m-%d)" '$1 < date { print("true"); }')
+		if [[ "$can_delete" != "true" ]] || [[ "$branch" =~ ^(main|master|develop|dev)$ ]]; then
+			# check if branch doesn't contain reserved words
+			echo "Cannot delete protected branch: $branch"
+			continue
+		fi
+	fi
+	echo "Deleting branch: $branch"
+	git push -d origin $(echo $branch)
+done
